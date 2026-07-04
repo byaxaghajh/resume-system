@@ -211,41 +211,43 @@ if uploaded_files:
         })
         st.dataframe(detail_df, hide_index=True)
 
-    with col2:
-        st.subheader("🎯 能力画像")
+        with col2:
+        st.subheader("🎯 Ability Profile")
 
         fig, ax = plt.subplots(figsize=(8, 5))
 
+        # 将中文指标名改为英文
+        name_map = {
+            '教育水平': 'Education',
+            '专业对口度': 'Major Match',
+            '公司实力': 'Company',
+            '稳定性': 'Stability',
+            '晋升速度': 'Promotion',
+            '重大成果': 'Achievement',
+            '领导力': 'Leadership'
+        }
         names = list(cand['details'].keys())
+        names_en = [name_map.get(n, n) for n in names]
         values = list(cand['details'].values())
 
-        # 颜色：>=0.6绿色，>=0.4橙色，<0.4红色
         colors = ['#2ecc71' if v >= 0.6 else '#f39c12' if v >= 0.4 else '#e74c3c' for v in values]
 
-        bars = ax.barh(names, values, color=colors, height=0.6, edgecolor='white', linewidth=1)
+        bars = ax.barh(names_en, values, color=colors, height=0.6, edgecolor='white', linewidth=1)
 
         for bar, val in zip(bars, values):
-            ax.text(
-                bar.get_width() + 0.02,
-                bar.get_y() + bar.get_height() / 2,
-                f'{val:.2f}',
-                va='center',
-                ha='left',
-                fontsize=10,
-                fontweight='bold'
-            )
+            ax.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
+                    f'{val:.2f}', va='center', ha='left', fontsize=10, fontweight='bold')
 
         ax.set_xlim(0, 1.0)
-        ax.set_xlabel('归一化得分', fontsize=11)
+        ax.set_xlabel('Score', fontsize=11)
 
-        # 去掉多余边框
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['bottom'].set_color('#cccccc')
         ax.spines['left'].set_color('#cccccc')
 
         ax.grid(axis='x', linestyle='--', alpha=0.25)
-        ax.set_title(f'{cand["name"]} 能力画像', fontsize=13, fontweight='bold', pad=15)
+        ax.set_title(f'{cand["name"]} Ability Profile', fontsize=13, fontweight='bold', pad=15)
 
         plt.tight_layout()
         st.pyplot(fig)
