@@ -211,7 +211,7 @@ if uploaded_files:
         })
         st.dataframe(detail_df, hide_index=True)
 
-        with col2:
+    with col2:
         st.subheader("🎯 Ability Profile")
 
         fig, ax = plt.subplots(figsize=(8, 5))
