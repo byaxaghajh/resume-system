@@ -196,11 +196,11 @@ if uploaded_files:
     col1, col2 = st.columns([1, 1])
 
     with col1:
-       st.subheader("📋 Candidate Details")
-       selected_idx = st.selectbox(
-           "Select Candidate",
-           range(len(results)),
-           format_func=lambda i: f"{i+1}. Candidate {i+1} (Score: {results[i]['score']:.4f})"
+        st.subheader("📋 Candidate Details")
+        selected_idx = st.selectbox(
+            "Select Candidate",
+            range(len(results)),
+            format_func=lambda i: f"{i + 1}. Candidate {i + 1} (Score: {results[i]['score']:.4f})"
         )
         cand = results[selected_idx]
         st.metric("Score", f"{cand['score']:.4f}")
@@ -247,7 +247,7 @@ if uploaded_files:
         ax.spines['left'].set_color('#cccccc')
 
         ax.grid(axis='x', linestyle='--', alpha=0.25)
-      # 候选人姓名改为英文或编号，避免中文显示为方框
+        # 候选人姓名改为英文或编号，避免中文显示为方框
         candidate_name = f'Candidate {selected_idx + 1}'
         ax.set_title(f'{candidate_name} Ability Profile', fontsize=13, fontweight='bold', pad=15)
 
