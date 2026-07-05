@@ -1,7 +1,6 @@
 """
-智能简历推荐系统 —— 完整版
-功能：支持默认6行业 + 用户自定义行业
-公式：Score_i = Σ w_j · x_ij
+智能简历推荐系统 —— 方案B（直接读取论文数据）
+功能：展示论文中36份简历的综合得分与排名（与论文表3完全一致）
 运行：streamlit run shaixuanxitong.py
 """
 
@@ -24,7 +23,7 @@ st.set_page_config(
 )
 
 st.title("📄 智能简历推荐系统")
-st.markdown("基于熵权法多指标评价模型 · 支持自定义行业与权重")
+st.markdown("基于熵权法多指标评价模型 · 展示论文排名数据")
 
 
 # ============ 加载/管理权重 ============
@@ -73,25 +72,14 @@ with st.sidebar:
     # ---- 行业选择 ----
     industry = st.selectbox("选择目标行业", industries)
 
-    # ---- 归一化模式 ----
-    st.divider()
-    st.subheader("⚙️ 归一化模式")
-    alpha = st.slider(
-        "论文基准权重（α）",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.7,
-        step=0.05,
-        help="α=1：完全与论文一致 | α=0：仅在当前上传的人之间比较"
-    )
-
-    # ---- 文件上传 ----
+    # ---- 文件上传（无实际解析，仅用于触发展示） ----
     st.divider()
     st.subheader("📤 上传简历")
     uploaded_files = st.file_uploader(
         "支持 .docx 格式（可多选）",
         type=['docx'],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        help="上传后系统将展示该行业的论文排名数据"
     )
 
     # ---- 显示当前权重 ----
@@ -99,7 +87,7 @@ with st.sidebar:
         w_display = weights_df.loc[industry].to_frame().T
         st.dataframe(w_display.style.format("{:.2f}%"))
 
-    st.caption("💡 上传后系统自动解析并排序")
+    st.caption("💡 上传简历后展示论文排名数据")
 
     # ===== 新增：自定义行业功能 =====
     st.divider()
@@ -311,12 +299,12 @@ if uploaded_files:
             save_weights(weights_df)
 
             # 重新计算得分并排序
-            w_new = weights_df.loc[industry].values / 100
             if df_norm is not None:
                 industry_data = df_norm[df_norm['industry'] == industry].copy()
                 if len(industry_data) > 0:
                     indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
                                   'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
+                    w_new = weights_df.loc[industry].values / 100
                     scores = industry_data[indicators].dot(w_new)
                     industry_data['综合得分'] = scores
                     industry_data = industry_data.sort_values('综合得分', ascending=False)
@@ -358,24 +346,4 @@ else:
 
         ### 数据来源
         排名数据来自论文的归一化计算结果（`各行业排名表.xlsx`）
-        """)
-
-else:
-    st.info("👈 请在左侧上传简历文件")
-
-    with st.expander("📖 使用说明", expanded=True):
-        st.markdown("""
-        ### 操作步骤
-        1. **选择行业** → 在左侧下拉菜单中选择目标行业
-        2. **上传简历** → 点击上传按钮，选择Word格式简历（支持多选）
-        3. **查看排名** → 系统自动解析并计算综合得分
-        4. **查看详情** → 点击候选人查看各项指标得分和能力画像
-        5. **调节权重** → 拖动滑块调整权重，点击刷新查看排名变化
-
-        ### 新增自定义行业
-        1. 点击侧边栏「新增自定义行业」
-        2. 输入行业名称（如「金融」）
-        3. 为七个指标分配权重（总和100）
-        4. 点击「添加行业」
-        5. 在行业下拉菜单中选择新添加的行业
         """)
