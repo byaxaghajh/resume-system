@@ -164,8 +164,19 @@ if uploaded_files:
     for i, file in enumerate(uploaded_files):
         try:
             import docx
+
             doc = docx.Document(file)
+
+            # 提取段落文本
             text = '\n'.join([p.text for p in doc.paragraphs])
+
+            # 提取表格文本（关键修改）
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            text += '\n' + cell.text
+
             cand = parse_resume(text, industry)
             cand['name'] = file.name.replace('.docx', '').replace('.DOCX', '')
             candidates.append(cand)
@@ -179,6 +190,10 @@ if uploaded_files:
         st.stop()
 
     # ---- 计算得分 ----
+    # 在 results = calculate_scores(...) 之前添加
+    for c in candidates:
+        st.write(
+            f"{c['name']}: 教育={c['education']}, 专业={c['major_match']}, 公司={c['company_strength']}, 稳定性={c['stability']}, 晋升={c['promotion_speed']}, 成果={c['achievement']}, 领导力={c['leadership']}")
     results = calculate_scores(candidates, industry, weights_df, alpha)
 
     # ---- 排名表 ----
