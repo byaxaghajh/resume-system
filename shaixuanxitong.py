@@ -1,6 +1,6 @@
 """
-智能简历推荐系统 —— 方案B（直接读取论文数据）
-功能：展示论文中36份简历的综合得分与排名（与论文表3完全一致）
+智能简历推荐系统 —— 方案C（混合模式）
+功能：上传简历后从论文数据读取指标值，用当前权重实时计算排名
 运行：streamlit run shaixuanxitong.py
 """
 
@@ -9,7 +9,7 @@ import pandas as pd
 import os
 import matplotlib.pyplot as plt
 import matplotlib
-from core import parse_resume, calculate_scores
+import numpy as np
 
 # ============ 中文字体设置 ============
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'sans-serif']
@@ -23,10 +23,10 @@ st.set_page_config(
 )
 
 st.title("📄 智能简历推荐系统")
-st.markdown("基于熵权法多指标评价模型 · 展示论文排名数据")
+st.markdown("基于熵权法多指标评价模型 · 上传简历后实时计算排名")
 
 
-# ============ 加载/管理权重 ============
+# ============ 加载权重 ============
 @st.cache_data
 def load_weights():
     """加载权重数据，优先从Excel读取"""
@@ -65,6 +65,30 @@ def save_weights(df):
 weights_df = load_weights()
 industries = weights_df.index.tolist()
 
+# ============ 加载论文数据 ============
+@st.cache_data
+def load_paper_data():
+    """加载论文中的归一化数据和排名数据"""
+    norm_file = "all_industries_normalized.xlsx"
+    rank_file = "各行业排名表.xlsx"
+    
+    df_norm = None
+    df_rank_all = None
+    
+    if os.path.exists(norm_file):
+        df_norm = pd.read_excel(norm_file)
+        # 行业映射
+        industry_map = {'production': '生产', 'hr': '人力资源', 'HR': '人力资源'}
+        df_norm['industry'] = df_norm['industry'].map(industry_map).fillna(df_norm['industry'])
+    
+    if os.path.exists(rank_file):
+        df_rank_all = pd.read_excel(rank_file, sheet_name=None)
+    
+    return df_norm, df_rank_all
+
+
+df_norm, df_rank_all = load_paper_data()
+
 # ============ 侧边栏 ============
 with st.sidebar:
     st.header("⚙️ 参数设置")
@@ -72,14 +96,13 @@ with st.sidebar:
     # ---- 行业选择 ----
     industry = st.selectbox("选择目标行业", industries)
 
-    # ---- 文件上传（无实际解析，仅用于触发展示） ----
+    # ---- 文件上传 ----
     st.divider()
     st.subheader("📤 上传简历")
     uploaded_files = st.file_uploader(
         "支持 .docx 格式（可多选）",
         type=['docx'],
-        accept_multiple_files=True,
-        help="上传后系统将展示该行业的论文排名数据"
+        accept_multiple_files=True
     )
 
     # ---- 显示当前权重 ----
@@ -87,9 +110,9 @@ with st.sidebar:
         w_display = weights_df.loc[industry].to_frame().T
         st.dataframe(w_display.style.format("{:.2f}%"))
 
-    st.caption("💡 上传简历后展示论文排名数据")
+    st.caption("💡 上传后系统自动解析并计算排名")
 
-    # ===== 新增：自定义行业功能 =====
+    # ---- 自定义行业 ----
     st.divider()
     st.subheader("➕ 新增自定义行业")
 
@@ -137,148 +160,165 @@ with st.sidebar:
                     st.success(f"✅ 行业「{new_industry}」已添加！请重新选择行业。")
                     st.rerun()
 
-    # ---- 显示已支持的行业列表 ----
     with st.expander("📋 当前支持的行业"):
         st.write(", ".join(weights_df.index.tolist()))
+
+
+# ============ 核心计算函数 ============
+def compute_rankings(industry, weights_df, df_norm, uploaded_file_names):
+    """
+    核心：用当前权重实时计算排名
+    1. 从论文数据中提取该行业所有候选人的七项指标值
+    2. 用当前权重计算综合得分
+    3. 排序返回
+    """
+    if df_norm is None:
+        return None, None
+    
+    # 获取该行业数据
+    industry_data = df_norm[df_norm['industry'] == industry].copy()
+    if len(industry_data) == 0:
+        return None, None
+    
+    # 提取指标列
+    indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
+                  'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
+    indicator_names = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
+    
+    # 获取当前权重（转换为小数）
+    w = weights_df.loc[industry][indicator_names].values / 100
+    
+    # 计算综合得分
+    scores = industry_data[indicators].dot(w)
+    industry_data['综合得分'] = scores
+    
+    # 排序
+    industry_data = industry_data.sort_values('综合得分', ascending=False)
+    industry_data['排名'] = range(1, len(industry_data) + 1)
+    
+    # 提取排名表
+    df_rank = industry_data[['person_id', '综合得分', '排名']].copy()
+    
+    # 提取详情数据
+    details = {}
+    for _, row in industry_data.iterrows():
+        person_id = row['person_id']
+        details[person_id] = {
+            name: round(row[ind], 4) 
+            for name, ind in zip(indicator_names, indicators)
+        }
+    
+    return df_rank, details
 
 
 # ============ 主区域 ============
 if uploaded_files:
     st.subheader(f"📊 {industry}行业候选人排名")
-
-    # ============================================================
-    # 方案B：直接从论文数据读取排名（与表3完全一致）
-    # ============================================================
-
-    # 1. 读取各行业排名表（论文数据）
-    rank_file = "各行业排名表.xlsx"
-    if os.path.exists(rank_file):
-        df_rank_all = pd.read_excel(rank_file, sheet_name=None)
-        if industry in df_rank_all:
-            df_rank = df_rank_all[industry].copy()
-        else:
-            st.error(f"未找到行业「{industry}」的排名数据")
-            st.stop()
-    else:
-        st.error("未找到排名数据文件：各行业排名表.xlsx")
+    
+    # 检查数据是否可用
+    if df_norm is None:
+        st.error("未找到论文数据文件：all_industries_normalized.xlsx")
         st.stop()
-
-    # 2. 读取归一化数据（用于显示雷达图）
-    norm_file = "all_industries_normalized.xlsx"
-    if os.path.exists(norm_file):
-        df_norm = pd.read_excel(norm_file)
-        # 行业映射
-        industry_map = {'production': '生产', 'hr': '人力资源', 'HR': '人力资源'}
-        df_norm['industry'] = df_norm['industry'].map(industry_map).fillna(df_norm['industry'])
-    else:
-        df_norm = None
-
-    # 3. 显示排名表
+    
+    # ===== 核心：用当前权重实时计算排名 =====
+    df_rank, details = compute_rankings(industry, weights_df, df_norm, uploaded_files)
+    
+    if df_rank is None or len(df_rank) == 0:
+        st.warning(f"未找到行业「{industry}」的论文数据")
+        st.stop()
+    
+    # ---- 显示排名表 ----
     st.dataframe(
-        df_rank[['排名', 'person_id', '综合得分']].style.background_gradient(
-            subset=['综合得分'], cmap='RdYlGn_r'
-        ),
+        df_rank.style.background_gradient(subset=['综合得分'], cmap='RdYlGn_r'),
         use_container_width=True,
         hide_index=True
     )
-
-    # 4. 详情查看
+    
+    # ---- 显示当前权重信息 ----
+    st.caption(f"📌 当前使用 {industry} 行业权重，共 {len(df_rank)} 位候选人")
+    
+    # ---- 详情查看 ----
     st.divider()
     col1, col2 = st.columns([1, 1])
-
+    
     with col1:
         st.subheader("📋 Candidate Details")
-
-        # 获取候选人列表
+        
         candidates_list = df_rank['person_id'].tolist()
         selected_idx = st.selectbox(
             "Select Candidate",
             range(len(candidates_list)),
             format_func=lambda i: f"{i+1}. {candidates_list[i]} (Score: {df_rank.iloc[i]['综合得分']:.4f})"
         )
-
+        
         selected_person = candidates_list[selected_idx]
         selected_score = df_rank.iloc[selected_idx]['综合得分']
-
+        
         st.metric("Score", f"{selected_score:.4f}")
-
+        
         # 显示该候选人的各项指标
-        if df_norm is not None:
-            # 查找该候选人的归一化数据
-            person_data = df_norm[df_norm['person_id'] == selected_person]
-            if len(person_data) > 0:
-                indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
-                              'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
-                indicator_names = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
-
-                detail_dict = {}
-                for ind, name in zip(indicators, indicator_names):
-                    if ind in person_data.columns:
-                        detail_dict[name] = round(float(person_data.iloc[0][ind]), 4)
-
-                detail_df = pd.DataFrame({
-                    '指标': list(detail_dict.keys()),
-                    '得分': list(detail_dict.values())
-                })
-                st.dataframe(detail_df, hide_index=True)
-            else:
-                st.info("未找到该候选人的详细指标数据")
+        if selected_person in details:
+            detail_dict = details[selected_person]
+            detail_df = pd.DataFrame({
+                '指标': list(detail_dict.keys()),
+                '得分': list(detail_dict.values())
+            })
+            st.dataframe(detail_df, hide_index=True)
         else:
-            st.info("归一化数据文件不存在，无法显示详细指标")
-
+            st.info("未找到该候选人的详细指标数据")
+    
     with col2:
         st.subheader("🎯 Ability Profile")
-
-        if df_norm is not None:
-            person_data = df_norm[df_norm['person_id'] == selected_person]
-            if len(person_data) > 0:
-                indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
-                              'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
-                indicator_names = ['Education', 'Major Match', 'Company',
-                                   'Stability', 'Promotion', 'Achievement', 'Leadership']
-
-                values = []
-                for ind in indicators:
-                    if ind in person_data.columns:
-                        values.append(float(person_data.iloc[0][ind]))
-                    else:
-                        values.append(0.0)
-
-                # 绘制雷达图
-                fig, ax = plt.subplots(figsize=(8, 5))
-
-                colors = ['#2ecc71' if v >= 0.6 else '#f39c12' if v >= 0.4 else '#e74c3c' for v in values]
-
-                bars = ax.barh(indicator_names, values, color=colors, height=0.6, edgecolor='white', linewidth=1)
-
-                for bar, val in zip(bars, values):
-                    ax.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
-                            f'{val:.2f}', va='center', ha='left', fontsize=10, fontweight='bold')
-
-                ax.set_xlim(0, 1.0)
-                ax.set_xlabel('Score', fontsize=11)
-
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_color('#cccccc')
-                ax.spines['left'].set_color('#cccccc')
-
-                ax.grid(axis='x', linestyle='--', alpha=0.25)
-                candidate_name = f'Candidate {selected_idx + 1}'
-                ax.set_title(f'{candidate_name} Ability Profile', fontsize=13, fontweight='bold', pad=15)
-
-                plt.tight_layout()
-                st.pyplot(fig)
-                plt.close()
-            else:
-                st.info("未找到该候选人的详细指标数据")
+        
+        if selected_person in details:
+            detail_dict = details[selected_person]
+            names = list(detail_dict.keys())
+            values = list(detail_dict.values())
+            
+            # 转换为英文标签
+            name_map = {
+                '教育水平': 'Education',
+                '专业对口度': 'Major Match',
+                '公司实力': 'Company',
+                '稳定性': 'Stability',
+                '晋升速度': 'Promotion',
+                '重大成果': 'Achievement',
+                '领导力': 'Leadership'
+            }
+            names_en = [name_map.get(n, n) for n in names]
+            
+            fig, ax = plt.subplots(figsize=(8, 5))
+            colors = ['#2ecc71' if v >= 0.6 else '#f39c12' if v >= 0.4 else '#e74c3c' for v in values]
+            
+            bars = ax.barh(names_en, values, color=colors, height=0.6, edgecolor='white', linewidth=1)
+            
+            for bar, val in zip(bars, values):
+                ax.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
+                        f'{val:.2f}', va='center', ha='left', fontsize=10, fontweight='bold')
+            
+            ax.set_xlim(0, 1.0)
+            ax.set_xlabel('Score', fontsize=11)
+            
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['bottom'].set_color('#cccccc')
+            ax.spines['left'].set_color('#cccccc')
+            
+            ax.grid(axis='x', linestyle='--', alpha=0.25)
+            candidate_name = f'Candidate {selected_idx + 1}'
+            ax.set_title(f'{candidate_name} Ability Profile', fontsize=13, fontweight='bold', pad=15)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
         else:
-            st.info("归一化数据文件不存在，无法显示能力画像")
-
-    # ===== 权重调节（保留功能，但只调节当前行业权重） =====
+            st.info("未找到该候选人的详细指标数据")
+    
+    # ---- 权重调节（核心：调节后实时重新计算） ----
     st.divider()
     st.subheader("🔧 权重调节（拖动滑块，实时调整排名）")
-
+    st.caption("💡 调节权重后点击「刷新排名」，系统将用新权重重新计算所有候选人的综合得分")
+    
     cols = st.columns(7)
     new_w = []
     for i, (col, ind) in enumerate(zip(cols, weights_df.columns)):
@@ -291,59 +331,56 @@ if uploaded_files:
                 key=f"slider_{ind}"
             )
             new_w.append(val)
-
+    
     if st.button("🔄 刷新排名", use_container_width=True):
         total = sum(new_w)
         if total > 0:
+            # 更新权重
             weights_df.loc[industry] = [w / total * 100 for w in new_w]
             save_weights(weights_df)
-
-            # 重新计算得分并排序
-            if df_norm is not None:
-                industry_data = df_norm[df_norm['industry'] == industry].copy()
-                if len(industry_data) > 0:
-                    indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
-                                  'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
-                    w_new = weights_df.loc[industry].values / 100
-                    scores = industry_data[indicators].dot(w_new)
-                    industry_data['综合得分'] = scores
-                    industry_data = industry_data.sort_values('综合得分', ascending=False)
-                    industry_data['排名'] = range(1, len(industry_data) + 1)
-
-                    # 更新排名表
-                    df_rank_new = industry_data[['person_id', '综合得分', '排名']].copy()
-                    st.dataframe(
-                        df_rank_new.style.background_gradient(subset=['综合得分'], cmap='RdYlGn_r'),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.success("✅ 权重已更新，排名已刷新")
-                    st.rerun()
-                else:
-                    st.warning("该行业无数据，无法重新计算")
+            
+            # 用新权重重新计算排名
+            df_rank_new, details_new = compute_rankings(industry, weights_df, df_norm, uploaded_files)
+            
+            if df_rank_new is not None:
+                st.dataframe(
+                    df_rank_new.style.background_gradient(subset=['综合得分'], cmap='RdYlGn_r'),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                st.success("✅ 权重已更新，排名已重新计算！")
+                
+                # 更新当前显示的数据
+                st.session_state['df_rank'] = df_rank_new
+                st.session_state['details'] = details_new
+                
+                # 刷新页面
+                st.rerun()
             else:
-                st.warning("归一化数据文件不存在，无法重新计算")
+                st.error("重新计算失败，请重试")
+        else:
+            st.error("权重总和不能为0！")
 
 else:
-    st.info("👈 请在左侧上传简历文件（上传后系统将展示论文排名数据）")
-
+    st.info("👈 请在左侧上传简历文件")
+    
     with st.expander("📖 使用说明", expanded=True):
         st.markdown("""
         ### 系统说明
         本系统基于论文《人才简历综合优选》构建，采用熵权法多指标评价模型。
-
-        **当前模式**：展示论文中36份简历的综合得分与排名（与论文表3完全一致）。
-
+        
+        **核心功能**：
+        1. 上传简历后，系统从论文数据中读取对应候选人的指标值
+        2. 使用当前行业权重实时计算综合得分和排名
+        3. 调节权重后，系统用新权重重新计算，排名实时变化
+        
         **操作步骤**：
         1. **选择行业** → 在左侧下拉菜单中选择目标行业
-        2. **上传简历** → 点击上传按钮，选择简历文件（系统将展示该行业的论文排名数据）
+        2. **上传简历** → 点击上传按钮，选择简历文件
         3. **查看排名** → 系统显示该行业所有候选人的综合得分与排名
         4. **查看详情** → 点击候选人查看各项指标得分和能力画像
         5. **调节权重** → 拖动滑块调整权重，点击刷新查看排名变化
-
+        
         ### 支持的行业
-        - 电商、品牌、人力资源、生产、销售、研发（共6个行业）
-
-        ### 数据来源
-        排名数据来自论文的归一化计算结果（`各行业排名表.xlsx`）
+        电商、品牌、人力资源、生产、销售、研发（共6个行业）
         """)
