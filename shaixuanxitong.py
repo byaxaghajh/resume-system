@@ -1,5 +1,5 @@
 """
-智能简历推荐系统 —— 权重真正生效版
+智能简历推荐系统 —— 完整版
 """
 
 import streamlit as st
@@ -22,9 +22,7 @@ def load_weights():
     if os.path.exists("weights.xlsx"):
         try:
             df = pd.read_excel("weights.xlsx", index_col=0)
-            expected_cols = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
-            if all(col in df.columns for col in expected_cols):
-                return df
+            return df
         except:
             pass
     data = {
@@ -53,9 +51,6 @@ def load_paper_data():
 
 # ============ 3. 计算排名 ============
 def compute_rankings(industry, weights_df, df_norm):
-    """
-    用当前权重计算排名
-    """
     if df_norm is None:
         return None, None
 
@@ -67,14 +62,11 @@ def compute_rankings(industry, weights_df, df_norm):
                   'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
     indicator_names = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
 
-    # 获取当前权重
     w = weights_df.loc[industry][indicator_names].values / 100
 
-    # 计算综合得分
     scores = industry_data[indicators].dot(w)
     industry_data['综合得分'] = scores
 
-    # 排序
     industry_data = industry_data.sort_values('综合得分', ascending=False)
     industry_data['排名'] = range(1, len(industry_data) + 1)
 
@@ -91,7 +83,7 @@ def compute_rankings(industry, weights_df, df_norm):
     return df_rank, details
 
 
-# ============ 4. 初始化 session_state ============
+# ============ 4. 初始化 ============
 if 'weights_df' not in st.session_state:
     st.session_state.weights_df = load_weights()
 
@@ -112,11 +104,10 @@ if 'details' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 参数设置")
 
-    # 行业选择
+    # ---- 行业选择 ----
     industry = st.selectbox("选择目标行业", st.session_state.weights_df.index.tolist())
     if industry != st.session_state.industry:
         st.session_state.industry = industry
-        # 切换行业时重新计算
         df_rank, details = compute_rankings(
             industry,
             st.session_state.weights_df,
@@ -133,7 +124,6 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-    # 上传简历后，从论文数据加载排名
     if uploaded_files:
         df_rank, details = compute_rankings(
             st.session_state.industry,
@@ -143,12 +133,11 @@ with st.sidebar:
         st.session_state.df_rank = df_rank
         st.session_state.details = details
 
-    # 显示当前权重
     with st.expander("📊 当前行业权重"):
         w_display = st.session_state.weights_df.loc[st.session_state.industry].to_frame().T
         st.dataframe(w_display.style.format("{:.2f}%"))
 
-    st.caption("💡 上传简历后查看排名，调节权重后自动重新计算")
+    st.caption("💡 上传简历后查看排名，调节权重后点击「重新计算排名」")
 
 
 # ============ 6. 主区域 ============
@@ -159,41 +148,39 @@ if uploaded_files:
         st.warning("暂无数据")
         st.stop()
 
-    # ---- 显示排名表 ----
     st.dataframe(
         st.session_state.df_rank.style.background_gradient(subset=['综合得分'], cmap='RdYlGn_r'),
         use_container_width=True,
         hide_index=True
     )
 
-    # ---- 显示当前使用的权重（提示用户） ----
-    st.caption(f"📌 当前使用权重：{st.session_state.industry}行业（权重值见左侧展开面板）")
+    st.caption(f"📌 当前使用权重：{st.session_state.industry}行业")
 
-    # ---- 详情查看 ----
     st.divider()
     col1, col2 = st.columns([1, 1])
 
     with col1:
         st.subheader("📋 Candidate Details")
         candidates_list = st.session_state.df_rank['person_id'].tolist()
-        selected_idx = st.selectbox(
-            "Select Candidate",
-            range(len(candidates_list)),
-            format_func=lambda i: f"{i+1}. {candidates_list[i]} (Score: {st.session_state.df_rank.iloc[i]['综合得分']:.4f})"
-        )
+        if len(candidates_list) > 0:
+            selected_idx = st.selectbox(
+                "Select Candidate",
+                range(len(candidates_list)),
+                format_func=lambda i: f"{i+1}. {candidates_list[i]} (Score: {st.session_state.df_rank.iloc[i]['综合得分']:.4f})"
+            )
 
-        selected_person = candidates_list[selected_idx]
-        selected_score = st.session_state.df_rank.iloc[selected_idx]['综合得分']
+            selected_person = candidates_list[selected_idx]
+            selected_score = st.session_state.df_rank.iloc[selected_idx]['综合得分']
 
-        st.metric("综合得分", f"{selected_score:.4f}")
+            st.metric("综合得分", f"{selected_score:.4f}")
 
-        if st.session_state.details and selected_person in st.session_state.details:
-            detail_dict = st.session_state.details[selected_person]
-            detail_df = pd.DataFrame({
-                '指标': list(detail_dict.keys()),
-                '得分': list(detail_dict.values())
-            })
-            st.dataframe(detail_df, hide_index=True)
+            if st.session_state.details and selected_person in st.session_state.details:
+                detail_dict = st.session_state.details[selected_person]
+                detail_df = pd.DataFrame({
+                    '指标': list(detail_dict.keys()),
+                    '得分': list(detail_dict.values())
+                })
+                st.dataframe(detail_df, hide_index=True)
 
     with col2:
         st.subheader("🎯 Ability Profile")
@@ -239,9 +226,8 @@ if uploaded_files:
 
     # ---- 权重调节 ----
     st.divider()
-    st.subheader("🔧 权重调节（调节后自动重新计算排名）")
+    st.subheader("🔧 权重调节（调节后点击「重新计算排名」）")
 
-    # 显示当前权重值
     current_w = st.session_state.weights_df.loc[st.session_state.industry].values
     indicator_names = st.session_state.weights_df.columns.tolist()
 
@@ -259,22 +245,16 @@ if uploaded_files:
             )
             new_w.append(val)
 
-    # 显示权重总和
     total = sum(new_w)
     st.caption(f"权重总和：{total:.1f}%")
 
-    # 刷新按钮
     if st.button("🔄 重新计算排名", use_container_width=True):
         if total == 0:
             st.error("权重总和不能为0！")
         else:
-            # 归一化权重
             norm_w = [w / total * 100 for w in new_w]
-
-            # 更新权重
             st.session_state.weights_df.loc[st.session_state.industry] = norm_w
 
-            # 重新计算排名
             df_rank, details = compute_rankings(
                 st.session_state.industry,
                 st.session_state.weights_df,
@@ -287,22 +267,4 @@ if uploaded_files:
             st.rerun()
 
 else:
-    st.info("👈 请在左侧上传简历文件（上传后系统将展示论文排名数据）")
-
-    with st.expander("📖 使用说明", expanded=True):
-        st.markdown("""
-        ### 系统说明
-        本系统基于论文《人才简历综合优选》构建。
-
-        **操作步骤**：
-        1. **选择行业** → 在左侧下拉菜单中选择目标行业
-        2. **上传简历** → 点击上传按钮，选择简历文件
-        3. **查看排名** → 系统显示该行业所有候选人的综合得分与排名
-        4. **查看详情** → 点击候选人查看各项指标得分和能力画像
-        5. **调节权重** → 拖动滑块调整权重，点击「重新计算排名」查看变化
-
-        ### 权重调节说明
-        - 调节权重后，系统会用新权重**重新计算**每个候选人的综合得分
-        - 综合得分会变化，排名也可能变化
-        - 单项指标得分（如教育水平）来自简历本身，不受权重影响（这是正确的）
-        """)
+    st.info("👈 请在左侧上传简历文件")
