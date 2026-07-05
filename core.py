@@ -19,7 +19,6 @@ def calc_education(edu_text):
     else:
         score = 0.3
 
-    # 985/211/双一流院校修正
     key_univ = ['清华大学', '北京大学', '复旦大学', '上海交通大学',
                 '浙江大学', '南京大学', '武汉大学', '华中科技大学']
     for uni in key_univ:
@@ -188,45 +187,37 @@ def parse_resume(text, industry):
         'leadership': 0.0
     }
 
-    # 提取姓名
     name_match = re.search(r'(?:姓名|name)[：:]\s*([^\s\n]+)', text, re.IGNORECASE)
     if name_match:
         result['name'] = name_match.group(1)
 
-    # 教育水平
     edu_match = re.search(r'(?:最高学历|学历|教育)[：:]\s*([^\n]+)', text)
     if edu_match:
         result['education'] = calc_education(edu_match.group(1))
 
-    # 专业对口度
     major_match = re.search(r'(?:专业|所学专业)[：:]\s*([^\n]+)', text)
     if major_match:
         result['major_match'] = calc_major_match(major_match.group(1), industry)
 
-    # 公司实力
     company_match = re.search(r'(?:公司|单位|企业)[：:]\s*([^\n]+)', text)
     if company_match:
         result['company_strength'] = calc_company_power(company_match.group(1))
 
-    # 稳定性
     years = re.findall(r'(\d{4})\s*[-~至]\s*(\d{4})', text)
     if years:
         durations = [int(end) - int(start) for start, end in years]
         result['stability'] = calc_stability(durations)
 
-    # 晋升速度
     positions = re.findall(r'(?:职位|岗位)[：:]\s*([^\n]+)', text)
     if not positions:
         positions = re.findall(r'[专员助理主管经理总监总经理]+', text)
     if positions:
         result['promotion_speed'] = calc_promotion_speed(positions)
 
-    # 重大成果
     projects = re.findall(r'(?:项目|成果|业绩)[：:]\s*([^\n]+)', text)
     if projects:
         result['achievement'] = calc_achievement(projects, industry)
 
-    # 领导力
     work_desc = re.findall(r'(?:工作描述|职责|岗位职责)[：:]\s*([^\n]+)', text)
     if work_desc:
         result['leadership'] = calc_leadership(work_desc, projects)
@@ -234,27 +225,37 @@ def parse_resume(text, industry):
     return result
 
 
-# ========== 3. Min-Max归一化 ==========
+# ========== 3. 混合归一化 + 综合评分 ==========
 
-def min_max_normalize(values):
-    """对应论文公式(1)"""
-    min_val, max_val = min(values), max(values)
-    if max_val == min_val:
-        return [0.0] * len(values)
-    return [(v - min_val) / (max_val - min_val) for v in values]
-
-
-# ========== 4. 综合评分 ==========
-
-def calculate_scores(candidates, industry, weights_df):
+def calculate_scores(candidates, industry, weights_df, alpha=0.7):
     """
     计算所有候选人的综合得分
+    使用混合归一化：论文极值 + 批次极值加权
     对应论文第五章公式：Score_i = Σ w_j · x_ij
     """
     indicators = weights_df.columns.tolist()
     w = weights_df.loc[industry].values / 100
 
-    results = []
+    PAPER_MIN = {
+        'education': 0.0,
+        'major_match': 0.0,
+        'company_strength': 0.0,
+        'stability': 0.0,
+        'promotion_speed': 0.0,
+        'achievement': 0.0,
+        'leadership': 0.0
+    }
+    PAPER_MAX = {
+        'education': 1.0,
+        'major_match': 1.0,
+        'company_strength': 1.0,
+        'stability': 1.0,
+        'promotion_speed': 1.0,
+        'achievement': 1.0,
+        'leadership': 1.0
+    }
+
+    all_raw = []
     for cand in candidates:
         raw = [
             cand['education'],
@@ -265,14 +266,37 @@ def calculate_scores(candidates, industry, weights_df):
             cand['achievement'],
             cand['leadership']
         ]
-
-        # 晋升速度取倒数（正向化）
         raw[4] = 1.0 / (raw[4] + 0.01) if raw[4] > 0 else 0.0
+        all_raw.append(raw)
 
-        # 归一化
-        norm = min_max_normalize(raw)
+    batch_min = [min(col) for col in zip(*all_raw)] if all_raw else [0] * 7
+    batch_max = [max(col) for col in zip(*all_raw)] if all_raw else [1] * 7
 
-        # 加权求和
+    col_names = ['education', 'major_match', 'company_strength',
+                 'stability', 'promotion_speed', 'achievement', 'leadership']
+
+    results = []
+    for cand, raw in zip(candidates, all_raw):
+        norm = []
+        for i, (col, val) in enumerate(zip(col_names, raw)):
+            paper_min = PAPER_MIN[col]
+            paper_max = PAPER_MAX[col]
+            batch_min_i = batch_min[i]
+            batch_max_i = batch_max[i]
+
+            if paper_max == paper_min:
+                paper_norm = 0.0
+            else:
+                paper_norm = max(0.0, min(1.0, (val - paper_min) / (paper_max - paper_min)))
+
+            if batch_max_i == batch_min_i:
+                batch_norm = 0.0
+            else:
+                batch_norm = max(0.0, min(1.0, (val - batch_min_i) / (batch_max_i - batch_min_i)))
+
+            mixed_norm = alpha * paper_norm + (1 - alpha) * batch_norm
+            norm.append(round(mixed_norm, 4))
+
         score = sum(w[i] * norm[i] for i in range(len(indicators)))
 
         results.append({
