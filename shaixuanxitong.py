@@ -1,5 +1,5 @@
 """
-智能简历推荐系统 —— 完整版
+智能简历推荐系统 —— 完整版（含自定义行业功能）
 """
 
 import streamlit as st
@@ -14,7 +14,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 st.set_page_config(page_title="智能简历推荐系统", page_icon="📄", layout="wide")
 
 st.title("📄 智能简历推荐系统")
-st.markdown("基于熵权法多指标评价模型 · 权重调节实时生效")
+st.markdown("基于熵权法多指标评价模型 · 支持自定义行业 · 权重调节实时生效")
 
 
 # ============ 1. 加载权重 ============
@@ -22,7 +22,9 @@ def load_weights():
     if os.path.exists("weights.xlsx"):
         try:
             df = pd.read_excel("weights.xlsx", index_col=0)
-            return df
+            expected_cols = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
+            if all(col in df.columns for col in expected_cols):
+                return df
         except:
             pass
     data = {
@@ -36,6 +38,14 @@ def load_weights():
     }
     industries = ['电商', '品牌', '人力资源', '生产', '销售', '研发']
     return pd.DataFrame(data, index=industries)
+
+
+def save_weights(df):
+    try:
+        df.to_excel("weights.xlsx")
+        return True
+    except:
+        return False
 
 
 # ============ 2. 加载论文数据 ============
@@ -61,6 +71,11 @@ def compute_rankings(industry, weights_df, df_norm):
     indicators = ['education_norm', 'major_match_norm', 'company_strength_norm',
                   'stability_norm', 'promotion_speed_norm', 'achievement_norm', 'leadership_norm']
     indicator_names = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
+
+    # 如果该行业不在权重表中，用默认权重
+    if industry not in weights_df.index:
+        default_w = {name: 100/7 for name in indicator_names}
+        return None, None
 
     w = weights_df.loc[industry][indicator_names].values / 100
 
@@ -105,7 +120,8 @@ with st.sidebar:
     st.header("⚙️ 参数设置")
 
     # ---- 行业选择 ----
-    industry = st.selectbox("选择目标行业", st.session_state.weights_df.index.tolist())
+    available_industries = st.session_state.weights_df.index.tolist()
+    industry = st.selectbox("选择目标行业", available_industries)
     if industry != st.session_state.industry:
         st.session_state.industry = industry
         df_rank, details = compute_rankings(
@@ -134,10 +150,64 @@ with st.sidebar:
         st.session_state.details = details
 
     with st.expander("📊 当前行业权重"):
-        w_display = st.session_state.weights_df.loc[st.session_state.industry].to_frame().T
-        st.dataframe(w_display.style.format("{:.2f}%"))
+        if st.session_state.industry in st.session_state.weights_df.index:
+            w_display = st.session_state.weights_df.loc[st.session_state.industry].to_frame().T
+            st.dataframe(w_display.style.format("{:.2f}%"))
+        else:
+            st.info("该行业暂无权重数据，请先添加")
 
     st.caption("💡 上传简历后查看排名，调节权重后点击「重新计算排名」")
+
+    # ========== 新增自定义行业 ==========
+    st.divider()
+    st.subheader("➕ 新增自定义行业")
+
+    with st.expander("点击展开，添加新行业"):
+        new_industry = st.text_input(
+            "行业名称",
+            placeholder="例如：金融、医疗、教育...",
+            key="new_industry_name"
+        )
+
+        st.caption("请为以下七个指标分配权重（总和应为100）")
+        cols_new = st.columns(7)
+        new_weights = []
+        for i, (col, ind) in enumerate(zip(cols_new, st.session_state.weights_df.columns)):
+            with col:
+                w = st.number_input(
+                    ind,
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=14.0,
+                    step=1.0,
+                    key=f"new_{ind}"
+                )
+                new_weights.append(w)
+
+        total_new = sum(new_weights)
+        if abs(total_new - 100) > 1:
+            st.caption(f"⚠️ 当前总和：{total_new:.1f}（建议调整为100）")
+        else:
+            st.caption(f"✅ 总和：{total_new:.1f}")
+
+        if st.button("✅ 添加行业", use_container_width=True):
+            if not new_industry:
+                st.warning("请输入行业名称！")
+            elif new_industry in st.session_state.weights_df.index:
+                st.warning(f"行业「{new_industry}」已存在！")
+            else:
+                total = sum(new_weights)
+                if total == 0:
+                    st.error("权重总和不能为0！")
+                else:
+                    norm_w = [w / total * 100 for w in new_weights]
+                    st.session_state.weights_df.loc[new_industry] = norm_w
+                    save_weights(st.session_state.weights_df)
+                    st.success(f"✅ 行业「{new_industry}」已添加！请重新选择行业。")
+                    st.rerun()
+
+    with st.expander("📋 当前支持的行业"):
+        st.write(", ".join(st.session_state.weights_df.index.tolist()))
 
 
 # ============ 6. 主区域 ============
@@ -145,7 +215,10 @@ if uploaded_files:
     st.subheader(f"📊 {st.session_state.industry}行业候选人排名")
 
     if st.session_state.df_rank is None or len(st.session_state.df_rank) == 0:
-        st.warning("暂无数据")
+        if st.session_state.industry in st.session_state.weights_df.index:
+            st.warning("该行业暂无候选人数据，请检查 all_industries_normalized.xlsx 文件")
+        else:
+            st.warning(f"行业「{st.session_state.industry}」已添加，但暂无候选人数据。请上传对应的简历文件。")
         st.stop()
 
     st.dataframe(
@@ -228,43 +301,47 @@ if uploaded_files:
     st.divider()
     st.subheader("🔧 权重调节（调节后点击「重新计算排名」）")
 
-    current_w = st.session_state.weights_df.loc[st.session_state.industry].values
-    indicator_names = st.session_state.weights_df.columns.tolist()
+    if st.session_state.industry in st.session_state.weights_df.index:
+        current_w = st.session_state.weights_df.loc[st.session_state.industry].values
+        indicator_names = st.session_state.weights_df.columns.tolist()
 
-    cols = st.columns(7)
-    new_w = []
-    for i, (col, ind) in enumerate(zip(cols, indicator_names)):
-        with col:
-            val = st.number_input(
-                ind,
-                min_value=0.0,
-                max_value=100.0,
-                value=float(current_w[i]),
-                step=1.0,
-                key=f"weight_{ind}"
-            )
-            new_w.append(val)
+        cols = st.columns(7)
+        new_w = []
+        for i, (col, ind) in enumerate(zip(cols, indicator_names)):
+            with col:
+                val = st.number_input(
+                    ind,
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(current_w[i]),
+                    step=1.0,
+                    key=f"weight_{ind}"
+                )
+                new_w.append(val)
 
-    total = sum(new_w)
-    st.caption(f"权重总和：{total:.1f}%")
+        total = sum(new_w)
+        st.caption(f"权重总和：{total:.1f}%")
 
-    if st.button("🔄 重新计算排名", use_container_width=True):
-        if total == 0:
-            st.error("权重总和不能为0！")
-        else:
-            norm_w = [w / total * 100 for w in new_w]
-            st.session_state.weights_df.loc[st.session_state.industry] = norm_w
+        if st.button("🔄 重新计算排名", use_container_width=True):
+            if total == 0:
+                st.error("权重总和不能为0！")
+            else:
+                norm_w = [w / total * 100 for w in new_w]
+                st.session_state.weights_df.loc[st.session_state.industry] = norm_w
+                save_weights(st.session_state.weights_df)
 
-            df_rank, details = compute_rankings(
-                st.session_state.industry,
-                st.session_state.weights_df,
-                st.session_state.df_norm
-            )
-            st.session_state.df_rank = df_rank
-            st.session_state.details = details
+                df_rank, details = compute_rankings(
+                    st.session_state.industry,
+                    st.session_state.weights_df,
+                    st.session_state.df_norm
+                )
+                st.session_state.df_rank = df_rank
+                st.session_state.details = details
 
-            st.success("✅ 权重已更新，排名已重新计算！")
-            st.rerun()
+                st.success("✅ 权重已更新，排名已重新计算！")
+                st.rerun()
+    else:
+        st.info("该行业暂无权重数据，请先在「新增自定义行业」中添加")
 
 else:
-    st.info("👈 请在左侧上传简历文件")
+    st.info("👈 请在左侧上传简历文件（上传后系统将展示论文排名数据）")
