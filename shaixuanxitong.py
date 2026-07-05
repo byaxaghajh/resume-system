@@ -34,21 +34,19 @@ def load_weights():
     if os.path.exists("weights.xlsx"):
         try:
             df = pd.read_excel("weights.xlsx", index_col=0)
-            # 确保列名正确
             expected_cols = ['教育水平', '专业对口度', '公司实力', '稳定性', '晋升速度', '重大成果', '领导力']
             if all(col in df.columns for col in expected_cols):
                 return df
         except:
             pass
 
-    # 默认权重（对应论文表2）
     data = {
         '教育水平': [10.35, 27.78, 5.59, 6.83, 31.23, 0.00],
         '专业对口度': [16.62, 27.28, 8.82, 3.67, 1.09, 3.15],
         '公司实力': [10.86, 11.95, 6.86, 7.04, 2.76, 0.24],
         '稳定性': [12.47, 6.78, 10.72, 12.04, 0.27, 5.41],
         '晋升速度': [9.27, 4.97, 14.63, 13.94, 12.17, 0.00],
-        '重大成果': [28.77, 11.15, 29.05, 24.83, 29.17, 54.92],
+        '重大成果': [28.77, 11.15, 29.05, 24.80, 29.17, 54.92],
         '领导力': [11.67, 10.09, 24.33, 31.69, 23.31, 36.28]
     }
     industries = ['电商', '品牌', '人力资源', '生产', '销售', '研发']
@@ -73,10 +71,18 @@ with st.sidebar:
     st.header("⚙️ 参数设置")
 
     # ---- 行业选择 ----
-    industry = st.selectbox(
-        "选择目标行业",
-        industries,
-        help="不同行业使用不同的权重配置"
+    industry = st.selectbox("选择目标行业", industries)
+
+    # ---- 归一化模式 ----
+    st.divider()
+    st.subheader("⚙️ 归一化模式")
+    alpha = st.slider(
+        "论文基准权重（α）",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.7,
+        step=0.05,
+        help="α=1：完全与论文一致 | α=0：仅在当前上传的人之间比较"
     )
 
     # ---- 文件上传 ----
@@ -121,7 +127,6 @@ with st.sidebar:
                 )
                 new_weights.append(w)
 
-        # 显示权重总和
         total_new = sum(new_weights)
         if abs(total_new - 100) > 1:
             st.caption(f"⚠️ 当前总和：{total_new:.1f}（建议调整为100）")
@@ -138,7 +143,6 @@ with st.sidebar:
                 if total == 0:
                     st.error("权重总和不能为0！")
                 else:
-                    # 归一化权重
                     norm_w = [w / total * 100 for w in new_weights]
                     weights_df.loc[new_industry] = norm_w
                     save_weights(weights_df)
@@ -149,18 +153,17 @@ with st.sidebar:
     with st.expander("📋 当前支持的行业"):
         st.write(", ".join(weights_df.index.tolist()))
 
+
 # ============ 主区域 ============
 if uploaded_files:
     st.subheader(f"📊 {industry}行业候选人排名")
 
-    # ---- 解析简历 ----
     candidates = []
     progress_bar = st.progress(0)
 
     for i, file in enumerate(uploaded_files):
         try:
             import docx
-
             doc = docx.Document(file)
             text = '\n'.join([p.text for p in doc.paragraphs])
             cand = parse_resume(text, industry)
@@ -176,7 +179,7 @@ if uploaded_files:
         st.stop()
 
     # ---- 计算得分 ----
-    results = calculate_scores(candidates, industry, weights_df)
+    results = calculate_scores(candidates, industry, weights_df, alpha)
 
     # ---- 排名表 ----
     df_rank = pd.DataFrame([{
@@ -216,7 +219,6 @@ if uploaded_files:
 
         fig, ax = plt.subplots(figsize=(8, 5))
 
-        # 将中文指标名改为英文
         name_map = {
             '教育水平': 'Education',
             '专业对口度': 'Major Match',
@@ -247,7 +249,6 @@ if uploaded_files:
         ax.spines['left'].set_color('#cccccc')
 
         ax.grid(axis='x', linestyle='--', alpha=0.25)
-        # 候选人姓名改为英文或编号，避免中文显示为方框
         candidate_name = f'Candidate {selected_idx + 1}'
         ax.set_title(f'{candidate_name} Ability Profile', fontsize=13, fontweight='bold', pad=15)
 
@@ -281,7 +282,6 @@ if uploaded_files:
             st.rerun()
 
 else:
-    # ---- 空状态 ----
     st.info("👈 请在左侧上传简历文件")
 
     with st.expander("📖 使用说明", expanded=True):
