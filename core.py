@@ -175,6 +175,7 @@ def calc_leadership(work_desc_list, project_list):
 def parse_resume(text, industry):
     """
     从简历文本中提取七项指标原始值
+    支持表格格式：起止时间丨公司名称丨职位
     """
     result = {
         'name': '未命名',
@@ -187,43 +188,150 @@ def parse_resume(text, industry):
         'leadership': 0.0
     }
 
+    # ===== 1. 提取姓名 =====
     name_match = re.search(r'(?:姓名|name)[：:]\s*([^\s\n]+)', text, re.IGNORECASE)
     if name_match:
         result['name'] = name_match.group(1)
 
-    edu_match = re.search(r'(?:最高学历|学历|教育)[：:]\s*([^\n]+)', text)
+    # ===== 2. 提取教育水平 =====
+    # 从表格中匹配：2007/09-2010/07丨河南工学院丨电子商务丨大专
+    edu_match = re.search(r'\d{4}/\d{2}-\d{4}/\d{2}.*?[丨|]\s*(本科|硕士|博士|大专|专科|MBA|EMBA)', text)
     if edu_match:
-        result['education'] = calc_education(edu_match.group(1))
+        edu_text = edu_match.group(1)
+        if '博士' in edu_text:
+            result['education'] = 0.9
+        elif '硕士' in edu_text or 'MBA' in edu_text or 'EMBA' in edu_text:
+            result['education'] = 0.7
+        elif '本科' in edu_text:
+            result['education'] = 0.5
+        else:
+            result['education'] = 0.3
+    else:
+        # 如果表格匹配失败，尝试段落匹配
+        edu_match = re.search(r'(?:最高学历|学历|教育)[：:]\s*([^\n]+)', text)
+        if edu_match:
+            edu_text = edu_match.group(1)
+            if '博士' in edu_text:
+                result['education'] = 0.9
+            elif '硕士' in edu_text or '研究生' in edu_text:
+                result['education'] = 0.7
+            elif '本科' in edu_text or '学士' in edu_text:
+                result['education'] = 0.5
+            else:
+                result['education'] = 0.3
 
-    major_match = re.search(r'(?:专业|所学专业)[：:]\s*([^\n]+)', text)
+    # ===== 3. 提取专业对口度 =====
+    major_match = re.search(r'\d{4}/\d{2}-\d{4}/\d{2}.*?[丨|]\s*([^丨|]+?)[丨|]', text)
     if major_match:
-        result['major_match'] = calc_major_match(major_match.group(1), industry)
+        major_text = major_match.group(1).strip()
+        result['major_match'] = calc_major_match(major_text, industry)
+    else:
+        major_match = re.search(r'(?:专业|所学专业)[：:]\s*([^\n]+)', text)
+        if major_match:
+            result['major_match'] = calc_major_match(major_match.group(1), industry)
 
-    company_match = re.search(r'(?:公司|单位|企业)[：:]\s*([^\n]+)', text)
+    # ===== 4. 提取公司实力 =====
+    # 从表格中匹配：2020/03-至今丨广州DD网络科技有限公司丨项目合伙人
+    company_match = re.search(r'\d{4}/\d{2}-\d{4}/\d{2}.*?[丨|]\s*([^丨|]+?)[丨|]', text)
     if company_match:
-        result['company_strength'] = calc_company_power(company_match.group(1))
+        company_text = company_match.group(1).strip()
+        if company_text and len(company_text) > 2:
+            result['company_strength'] = calc_company_power(company_text)
+    else:
+        company_match = re.search(r'(?:公司|单位|企业)[：:]\s*([^\n]+)', text)
+        if company_match:
+            result['company_strength'] = calc_company_power(company_match.group(1))
 
-    years = re.findall(r'(\d{4})\s*[-~至]\s*(\d{4})', text)
-    if years:
-        durations = [int(end) - int(start) for start, end in years]
-        result['stability'] = calc_stability(durations)
+    # ===== 5. 提取稳定性（平均在职时长） =====
+    # 匹配所有工作经历的时间段
+    work_periods = re.findall(r'(\d{4}/\d{2})-(\d{4}/\d{2}|至今)', text)
+    if work_periods:
+        durations = []
+        for start, end in work_periods:
+            start_year = int(start.split('/')[0])
+            if '至今' in end:
+                end_year = 2026
+            else:
+                end_year = int(end.split('/')[0])
+            duration = end_year - start_year
+            if duration > 0:
+                durations.append(duration)
+        if durations:
+            result['stability'] = sum(durations) / len(durations)
+    else:
+        # 尝试段落匹配
+        years = re.findall(r'(\d{4})\s*[-~至]\s*(\d{4})', text)
+        if years:
+            durations = [int(end) - int(start) for start, end in years]
+            result['stability'] = calc_stability(durations)
 
-    positions = re.findall(r'(?:职位|岗位)[：:]\s*([^\n]+)', text)
+    # ===== 6. 提取晋升速度 =====
+    # 从表格中提取所有职位
+    positions = re.findall(r'[丨|]\s*([^丨|]+?)(?:总监|总经理|经理|主管|负责人|合伙人|店长|组长|专员)', text)
     if not positions:
-        positions = re.findall(r'[专员助理主管经理总监总经理]+', text)
+        positions = re.findall(r'(总监|总经理|经理|主管|负责人|合伙人|店长|组长|专员)', text)
     if positions:
         result['promotion_speed'] = calc_promotion_speed(positions)
 
-    projects = re.findall(r'(?:项目|成果|业绩)[：:]\s*([^\n]+)', text)
-    if projects:
-        result['achievement'] = calc_achievement(projects, industry)
+    # ===== 7. 提取重大成果 =====
+    # 从段落中提取数字和关键词
+    achievement_score = 0.0
+    achievement_keywords = ['增长', '提升', '销售', 'GMV', '业绩', '操盘', '亿', '万', '爆款', '翻倍']
+    for kw in achievement_keywords:
+        if kw in text:
+            # 匹配数字
+            nums = re.findall(r'(\d+\.?\d*)\s*(?:亿|万|%)', text)
+            if nums:
+                max_num = max(float(n) for n in nums)
+                if max_num >= 10000:
+                    achievement_score = max(achievement_score, 0.9)
+                elif max_num >= 1000:
+                    achievement_score = max(achievement_score, 0.8)
+                elif max_num >= 100:
+                    achievement_score = max(achievement_score, 0.7)
+                else:
+                    achievement_score = max(achievement_score, 0.5)
+            else:
+                achievement_score = max(achievement_score, 0.4)
+    # 检查具体关键词
+    if '从0到1' in text or '从零到一' in text:
+        achievement_score = max(achievement_score, 0.7)
+    if '年销售' in text and '亿' in text:
+        achievement_score = max(achievement_score, 0.85)
+    result['achievement'] = min(achievement_score, 1.0)
 
-    work_desc = re.findall(r'(?:工作描述|职责|岗位职责)[：:]\s*([^\n]+)', text)
-    if work_desc:
-        result['leadership'] = calc_leadership(work_desc, projects)
+    # ===== 8. 提取领导力 =====
+    leadership_score = 0.0
+    # 团队规模
+    team_matches = re.findall(r'团队.*?(\d+)\s*人', text)
+    if team_matches:
+        max_team = max(int(n) for n in team_matches)
+        if max_team >= 50:
+            leadership_score += 0.7
+        elif max_team >= 20:
+            leadership_score += 0.6
+        elif max_team >= 10:
+            leadership_score += 0.5
+        elif max_team >= 5:
+            leadership_score += 0.4
+    # 管理职位
+    if '总监' in text or '总经理' in text or '合伙人' in text:
+        leadership_score += 0.2
+    elif '经理' in text or '主管' in text:
+        leadership_score += 0.1
+    # 下属人数
+    subordinate_match = re.search(r'下属\s*(\d+)\s*人', text)
+    if subordinate_match:
+        num = int(subordinate_match.group(1))
+        if num >= 50:
+            leadership_score = max(leadership_score, 0.7)
+        elif num >= 20:
+            leadership_score = max(leadership_score, 0.6)
+        elif num >= 10:
+            leadership_score = max(leadership_score, 0.5)
+    result['leadership'] = min(leadership_score, 1.0)
 
     return result
-
 
 # ========== 3. 混合归一化 + 综合评分 ==========
 
